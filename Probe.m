@@ -35,7 +35,6 @@ static BOOL RRDidHookPlayDescriptorCompletion;
 static BOOL RRDidHookInitDescriptor;
 static BOOL RRDidHookAddressBook;
 static BOOL RRInstallPollScheduled;
-static NSUInteger RRInstallAttempts;
 static __thread void *RRCurrentCall;
 
 static char RRDescriptorCallKey;
@@ -451,13 +450,12 @@ static void RRInstallHooks(void) {
 }
 
 static void RRScheduleInstallPoll(void) {
-    if (RRInstallPollScheduled || RRInstallAttempts >= 40) return;
+    if (RRInstallPollScheduled) return;
 
     RRInstallPollScheduled = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         RRInstallPollScheduled = NO;
-        RRInstallAttempts += 1;
         RRInstallHooks();
 
         BOOL hooksInstalled = RRDidHookPlaySoundType || RRDidHookPlaySoundTypeCompletion ||
@@ -470,7 +468,9 @@ static void RRScheduleInstallPoll(void) {
 __attribute__((constructor))
 static void RRInitialize(void) {
     @autoreleasepool {
-        if (![[NSProcessInfo processInfo].processName isEqualToString:@"SpringBoard"]) return;
+        NSString *processName = [NSProcessInfo processInfo].processName;
+        if (![processName isEqualToString:@"SpringBoard"] &&
+            ![processName isEqualToString:@"MobilePhone"]) return;
 
         RRInstallHooks();
         RRScheduleInstallPoll();

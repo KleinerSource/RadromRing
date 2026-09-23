@@ -18,4 +18,4 @@ Theos/RootHide 编译只在 GitHub Actions 执行。运行 `.github/workflows/bu
 
 ## 设备验证
 
-目标设备为 iPhone 14 Pro（`iPhone15,2`）、iOS 17.0（`21A329`）、Relaxin 0.5.3 / ElleKit 1.2-1。0.3.0 已从设备移除；它注入 `callservicesd` 后用户报告首次通话失败。0.3.1 已由 GitHub Actions run `35830181512` 构建通过，且只允许 `SpringBoard` 加载；此包尚未安装或验证来电行为，不应视为随机铃声已修复。先确认无 tweak 通话基线，再继续验证双卡来电、联系人专属铃声、关闭开关、空列表及铃声删除后的回退行为。
+目标设备为 iPhone 14 Pro（`iPhone15,2`）、iOS 17.0（`21A329`）、Relaxin 0.5.3 / ElleKit 1.2-1。0.3.0 曾注入 `callservicesd`，用户报告首次通话失败；之后已移除该进程过滤。0.3.1 仅注入 `SpringBoard`，但设备测试仍使用固定铃声。0.3.2 将 hook 范围扩展到 `SpringBoard` 和 `MobilePhone`，并持续等待 TelephonyUtilities 的 Objective-C 类出现；仍不注入 `callservicesd`。该版本需在设备上验证默认铃声随机切换、联系人专属铃声保护、双卡与回退行为。
