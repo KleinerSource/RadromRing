@@ -5,6 +5,7 @@
 #import <fcntl.h>
 #import <limits.h>
 #import <string.h>
+#import <sys/stat.h>
 #import <unistd.h>
 #import <stdarg.h>
 #import <dispatch/dispatch.h>
