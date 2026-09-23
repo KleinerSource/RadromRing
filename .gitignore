@@ -7,3 +7,5 @@ progress.md
 task_plan.md
 tools/*
 !tools/build_repo.py
+!tools/make_icon.py
+Prefs/Resources/icon*.png

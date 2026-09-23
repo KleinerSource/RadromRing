@@ -1,6 +1,6 @@
 Package: com.kleinersource.radromring-probe
 Name: RadromRing
-Version: 0.4.2
+Version: 0.5.0
 Architecture: iphoneos-arm64e
 Description: Randomize default iOS 17 cellular incoming call ringtones.
 Maintainer: KleinerSource

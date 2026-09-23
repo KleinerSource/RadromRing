@@ -56,7 +56,9 @@ jobs:
           "$RUNNER_TEMP/rr-selection-tests"
 
       - name: Build package
-        run: make clean package FINALPACKAGE=1
+        run: |
+          python3 tools/make_icon.py
+          make clean package FINALPACKAGE=1
 
       - name: Verify package
         run: |
@@ -80,6 +82,7 @@ jobs:
           expected = (
               "Library/PreferenceBundles/RadromRingPrefs.bundle/RadromRingPrefs",
               "Library/PreferenceBundles/RadromRingPrefs.bundle/Info.plist",
+              "Library/PreferenceBundles/RadromRingPrefs.bundle/icon@3x.png",
               "Library/PreferenceLoader/Preferences/RadromRingPrefs.plist",
           )
           missing = [suffix for suffix in expected if not any(path.endswith(suffix) for path in paths)]

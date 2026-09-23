@@ -2,6 +2,9 @@ TARGET := iphone:clang:latest:17.0
 ARCHS := arm64e
 THEOS_PACKAGE_SCHEME := roothide
 
+RR_VERSION := $(shell sed -n 's/^Version:[[:space:]]*//p' control)
+RR_AUTHOR := $(shell sed -n 's/^Author:[[:space:]]*//p' control)
+
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := RadromRingProbe
@@ -18,7 +21,7 @@ RadromRingPrefs_FILES := Prefs/RRRootListController.m
 RadromRingPrefs_FRAMEWORKS := UIKit
 RadromRingPrefs_INSTALL_PATH := /Library/PreferenceBundles
 RadromRingPrefs_RESOURCE_DIRS := Prefs/Resources
-RadromRingPrefs_CFLAGS := -fobjc-arc
+RadromRingPrefs_CFLAGS := -fobjc-arc -DRR_VERSION='"$(RR_VERSION)"' -DRR_AUTHOR='"$(RR_AUTHOR)"'
 RadromRingPrefs_LDFLAGS := -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
