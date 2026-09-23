@@ -24,10 +24,8 @@ if (!ObjC.available) {
       const call = new ObjC.Object(pointer);
       return {
         incoming: valueFor(call, "isIncoming"),
-        callUUID: valueFor(call, "callUUID"),
-        contactIdentifier: valueFor(call, "contactIdentifier"),
+        hasContactIdentifier: valueFor(call, "contactIdentifier") !== null,
         callStatus: valueFor(call, "callStatus"),
-        providerIdentifier: valueFor(call, "providerIdentifier"),
       };
     } catch (error) {
       return { readError: String(error) };

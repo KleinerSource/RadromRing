@@ -27,6 +27,9 @@ static BOOL RRDidHookPlayDescriptor;
 static BOOL RRDidHookPlayDescriptorCompletion;
 static BOOL RRInstallPollScheduled;
 static NSUInteger RRInstallAttempts;
+static NSMutableSet<NSString *> *RRLoggedRuntimeClasses;
+static BOOL RRDidLogToneManagerAbsence;
+static BOOL RRDidLogToneManagerCapabilities;
 
 static void RRLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 
@@ -53,14 +56,18 @@ static void RRLog(NSString *format, ...) {
     NSLog(@"[RadromRingProbe] %@", message);
 }
 
-static id RRObjectValue(id object, NSString *selectorName) {
+static id RRRawObjectValue(id object, NSString *selectorName) {
     SEL selector = NSSelectorFromString(selectorName);
     if (object == nil || ![object respondsToSelector:selector]) {
-        return @"<unavailable>";
+        return nil;
     }
 
     id (*sendMessage)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
-    id value = sendMessage(object, selector);
+    return sendMessage(object, selector);
+}
+
+static id RRObjectValue(id object, NSString *selectorName) {
+    id value = RRRawObjectValue(object, selectorName);
     return value ?: @"<nil>";
 }
 
@@ -72,6 +79,88 @@ static NSString *RRBooleanValue(id object, NSString *selectorName) {
 
     BOOL (*sendMessage)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
     return sendMessage(object, selector) ? @"YES" : @"NO";
+}
+
+static BOOL RRHasObjectValue(id object, NSString *selectorName) {
+    id value = RRRawObjectValue(object, selectorName);
+    return value != nil && value != NSNull.null &&
+           !([value isKindOfClass:NSString.class] && [(NSString *)value length] == 0);
+}
+
+static BOOL RRSelectorLooksRelevant(NSString *selectorName) {
+    NSArray<NSString *> *terms = @[@"ring", @"tone", @"sound", @"alert", @"contact"];
+    for (NSString *term in terms) {
+        if ([selectorName rangeOfString:term options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static void RRLogRelevantSelectors(Class targetClass) {
+    if (targetClass == Nil) return;
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        RRLoggedRuntimeClasses = [NSMutableSet set];
+    });
+
+    NSString *className = NSStringFromClass(targetClass);
+    @synchronized (RRLoggedRuntimeClasses) {
+        if ([RRLoggedRuntimeClasses containsObject:className]) return;
+        [RRLoggedRuntimeClasses addObject:className];
+    }
+
+    NSMutableOrderedSet<NSString *> *selectors = [NSMutableOrderedSet orderedSet];
+    for (Class current = targetClass; current != Nil && current != NSObject.class;
+         current = class_getSuperclass(current)) {
+        unsigned int count = 0;
+        Method *methods = class_copyMethodList(current, &count);
+        for (unsigned int index = 0; index < count; index++) {
+            NSString *name = NSStringFromSelector(method_getName(methods[index]));
+            if (RRSelectorLooksRelevant(name)) [selectors addObject:name];
+        }
+        free(methods);
+    }
+
+    RRLog(@"event=relevant-selectors class=%@ selectors=%@",
+          className, [[selectors array] componentsJoinedByString:@","]);
+}
+
+static void RRLogToneManagerCapabilities(void) {
+    Class managerClass = objc_getClass("TLToneManager");
+    if (managerClass == Nil) {
+        if (!RRDidLogToneManagerAbsence) {
+            RRDidLogToneManagerAbsence = YES;
+            RRLog(@"event=tone-manager-present value=NO");
+        }
+        return;
+    }
+    if (RRDidLogToneManagerCapabilities) return;
+    RRDidLogToneManagerCapabilities = YES;
+
+    RRLog(@"event=tone-manager-present value=YES");
+    const char *instanceSelectors[] = {
+        "nameForToneIdentifier:",
+        "filePathForToneIdentifier:",
+        "defaultRingtoneIdentifier",
+        "toneWithIdentifierIsValid:",
+        "currentToneIdentifierForAlertType:",
+    };
+    for (size_t index = 0; index < sizeof(instanceSelectors) / sizeof(instanceSelectors[0]); index++) {
+        SEL selector = sel_registerName(instanceSelectors[index]);
+        Method method = class_getInstanceMethod(managerClass, selector);
+        if (method != NULL) {
+            RRLog(@"event=tone-manager-method selector=%s encoding=%s",
+                  instanceSelectors[index], method_getTypeEncoding(method));
+        }
+    }
+
+    Method sharedManager = class_getClassMethod(managerClass, sel_registerName("sharedToneManager"));
+    if (sharedManager != NULL) {
+        RRLog(@"event=tone-manager-method selector=sharedToneManager encoding=%s",
+              method_getTypeEncoding(sharedManager));
+    }
 }
 
 static long long RRLongLongValue(id object, NSString *selectorName) {
@@ -110,10 +199,13 @@ static NSString *RRCallSummary(id call) {
         return @"<nil>";
     }
 
-    return [NSString stringWithFormat:@"incoming=%@ uuid=%@ contactID=%@ status=%lld",
+    RRLogRelevantSelectors(object_getClass(call));
+    id model = RRRawObjectValue(call, @"model");
+    if (model != nil) RRLogRelevantSelectors(object_getClass(model));
+
+    return [NSString stringWithFormat:@"incoming=%@ hasContact=%@ status=%lld",
                                       RRBooleanValue(call, @"isIncoming"),
-                                      RRObjectValue(call, @"callUUID"),
-                                      RRObjectValue(call, @"contactIdentifier"),
+                                      RRHasObjectValue(call, @"contactIdentifier") ? @"YES" : @"NO",
                                       RRLongLongValue(call, @"callStatus")];
 }
 
@@ -221,6 +313,8 @@ static void RRInstallHooks(void) {
               initMethod ? method_getTypeEncoding(initMethod) : "<missing-init>");
     }
 
+    RRLogToneManagerCapabilities();
+
     if (playerClass == Nil && RRInstallAttempts == 0) {
         RRLog(@"event=class-missing class=TUCallSoundPlayer");
     }
@@ -253,6 +347,7 @@ static void RRInitialize(void) {
     @autoreleasepool {
         RRLog(@"event=process-loaded");
         RRInstallHooks();
+        RRLogToneManagerCapabilities();
         RRScheduleInstallPoll();
     }
 }
