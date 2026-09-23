@@ -140,6 +140,7 @@ static void RRLogToneManagerCapabilities(void) {
     RRDidLogToneManagerCapabilities = YES;
 
     RRLog(@"event=tone-manager-present value=YES");
+    RRLogRelevantSelectors(managerClass);
     const char *instanceSelectors[] = {
         "nameForToneIdentifier:",
         "filePathForToneIdentifier:",

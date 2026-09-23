@@ -10,6 +10,8 @@ on:
       - Makefile
       - control
       - core/**
+      - Prefs/**
+      - layout/**
       - RadromRingProbe.plist
       - Probe.m
       - tests/**
@@ -54,11 +56,12 @@ jobs:
           file packages/*.deb
           ar -t packages/*.deb
           find .theos -name RadromRingProbe.dylib -exec file {} \;
+          dpkg-deb --contents packages/*.deb | grep -E 'RadromRingPrefs.bundle|PreferenceLoader/Preferences/RadromRingPrefs.plist'
           shasum -a 256 packages/*.deb
 
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
-          name: RadromRing-probe-roothide
+          name: RadromRing-config-probe-roothide
           path: packages/*.deb
           if-no-files-found: error
