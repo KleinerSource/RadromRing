@@ -1,0 +1,9 @@
+Package: com.kleinersource.radromring-probe
+Name: RadromRing Probe
+Version: 0.1.0
+Architecture: iphoneos-arm64e
+Description: Read-only diagnostics for iOS 17 incoming call ringtone resolution.
+Maintainer: KleinerSource
+Author: KleinerSource
+Section: Tweaks
+Depends: firmware (>= 17.0), firmware (<< 17.1), ellekit

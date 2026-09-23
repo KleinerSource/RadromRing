@@ -1,0 +1,54 @@
+name: Build RootHide tweak
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build.yml
+      - Makefile
+      - control
+      - RadromRingProbe.plist
+      - Probe.m
+      - tools/**
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      THEOS: /tmp/theos
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up RootHide Theos
+        run: |
+          brew install ldid
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/roothide/theos.git "$THEOS"
+
+      - name: Check probe script syntax
+        run: node --check tools/probe-call-ringtone.js
+
+      - name: Build package
+        run: make clean package FINALPACKAGE=1
+
+      - name: Verify package
+        run: |
+          dpkg-deb --info packages/*.deb
+          find .theos -name RadromRingProbe.dylib -exec file {} \;
+          shasum -a 256 packages/*.deb
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadromRing-probe-roothide
+          path: packages/*.deb
+          if-no-files-found: error

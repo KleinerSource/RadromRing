@@ -1,0 +1,9 @@
+{
+    Filter = {
+        Executables = (
+            callservicesd,
+            MobilePhone,
+            SpringBoard
+        );
+    };
+}
