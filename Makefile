@@ -16,9 +16,9 @@ BUNDLE_NAME := RadromRingPrefs
 
 RadromRingPrefs_FILES := Prefs/RRRootListController.m
 RadromRingPrefs_FRAMEWORKS := UIKit
-RadromRingPrefs_PRIVATE_FRAMEWORKS := Preferences
 RadromRingPrefs_INSTALL_PATH := /Library/PreferenceBundles
 RadromRingPrefs_RESOURCE_DIRS := Prefs/Resources
 RadromRingPrefs_CFLAGS := -fobjc-arc
+RadromRingPrefs_LDFLAGS := -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
