@@ -1,3 +1,8 @@
 .theos/
 packages/
 artifacts/
+findings.md
+progress.md
+.gitignore
+task_plan.md
+tools/
