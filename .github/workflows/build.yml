@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - codex/random-ringtone-implementation
     paths:
       - .github/workflows/build.yml
       - Makefile
@@ -16,9 +17,15 @@ on:
       - Probe.m
       - tests/**
       - tools/**
+      - repo/**
 
 permissions:
   contents: read
+
+# One Pages deployment at a time; the latest published branch wins.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -88,3 +95,31 @@ jobs:
           name: RadromRing-roothide
           path: packages/*.deb
           if-no-files-found: error
+
+      - name: Build APT repository
+        run: |
+          python3 tools/build_repo.py packages "$RUNNER_TEMP/repo"
+          cp repo/index.html "$RUNNER_TEMP/repo/"
+          touch "$RUNNER_TEMP/repo/.nojekyll"
+          cat "$RUNNER_TEMP/repo/Packages"
+
+      - name: Upload repository for Pages
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/random-ringtone-implementation'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/repo
+
+  deploy:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/random-ringtone-implementation'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
