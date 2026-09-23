@@ -1,231 +1,321 @@
 #import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <dispatch/dispatch.h>
+#import <dlfcn.h>
+#import <limits.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
-#import <substrate.h>
-#import <fcntl.h>
-#import <limits.h>
-#import <string.h>
-#import <sys/stat.h>
-#import <unistd.h>
-#import <stdarg.h>
-#import <dispatch/dispatch.h>
+#import <stdlib.h>
 
-static NSString *const RRProbeLogPath = @"/var/mobile/Library/Caches/RadromRingProbe.log";
+#import <substrate.h>
+
+#import "core/RRPreferences.h"
+#import "core/RRSelection.h"
 
 typedef BOOL (*RRPlaySoundTypeIMP)(id, SEL, long long, id);
 typedef BOOL (*RRPlaySoundTypeCompletionIMP)(id, SEL, long long, id, id);
 typedef BOOL (*RRPlayDescriptorIMP)(id, SEL, id);
 typedef BOOL (*RRPlayDescriptorCompletionIMP)(id, SEL, id, id);
+typedef id (*RRInitDescriptorIMP)(id, SEL, long long, id);
+typedef CFTypeRef (*RRAddressBookSoundLookupIMP)(const void *, int32_t);
 
 static RRPlaySoundTypeIMP RROriginalPlaySoundType;
 static RRPlaySoundTypeCompletionIMP RROriginalPlaySoundTypeCompletion;
 static RRPlayDescriptorIMP RROriginalPlayDescriptor;
 static RRPlayDescriptorCompletionIMP RROriginalPlayDescriptorCompletion;
+static RRInitDescriptorIMP RROriginalInitDescriptor;
+static RRAddressBookSoundLookupIMP RROriginalIndividualContactSoundLookup;
+static RRAddressBookSoundLookupIMP RROriginalLinkedContactSoundLookup;
+static RRAddressBookSoundLookupIMP RROriginalContactSoundLookup;
+
 static BOOL RRDidHookPlaySoundType;
 static BOOL RRDidHookPlaySoundTypeCompletion;
 static BOOL RRDidHookPlayDescriptor;
 static BOOL RRDidHookPlayDescriptorCompletion;
+static BOOL RRDidHookInitDescriptor;
+static BOOL RRDidHookAddressBook;
 static BOOL RRInstallPollScheduled;
 static NSUInteger RRInstallAttempts;
-static NSMutableSet<NSString *> *RRLoggedRuntimeClasses;
-static BOOL RRDidLogToneManagerAbsence;
-static BOOL RRDidLogToneManagerCapabilities;
+static __thread void *RRCurrentCall;
 
-static void RRLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+static char RRDescriptorCallKey;
+static char RRContactToneCheckedKey;
+static char RRContactToneFoundKey;
+static char RRCallToneStateKey;
 
-static void RRLog(NSString *format, ...) {
-    va_list arguments;
-    va_start(arguments, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:arguments];
-    va_end(arguments);
+static const long long RRIncomingRingtoneSoundType = 1;
+static NSCache<NSString *, id> *RRCallToneCache;
 
-    NSString *line = [NSString stringWithFormat:@"%@ pid=%d %@\n",
-                                                NSProcessInfo.processInfo.processName,
-                                                getpid(),
-                                                message];
-    @synchronized (RRProbeLogPath) {
-        int descriptor = open(RRProbeLogPath.fileSystemRepresentation,
-                              O_WRONLY | O_CREAT | O_APPEND,
-                              0644);
-        if (descriptor >= 0) {
-            fchmod(descriptor, 0644);
-            (void)write(descriptor, line.UTF8String, strlen(line.UTF8String));
-            close(descriptor);
-        }
-    }
-    NSLog(@"[RadromRingProbe] %@", message);
+static NSCache<NSString *, id> *RRToneCache(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        RRCallToneCache = [[NSCache alloc] init];
+        RRCallToneCache.countLimit = 32;
+    });
+    return RRCallToneCache;
 }
 
-static id RRRawObjectValue(id object, NSString *selectorName) {
+static id RRCallObjectGetter(id object, NSString *selectorName) {
     SEL selector = NSSelectorFromString(selectorName);
-    if (object == nil || ![object respondsToSelector:selector]) {
-        return nil;
-    }
-
+    if (object == nil || ![object respondsToSelector:selector]) return nil;
     id (*sendMessage)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
     return sendMessage(object, selector);
 }
 
-static id RRObjectValue(id object, NSString *selectorName) {
-    id value = RRRawObjectValue(object, selectorName);
-    return value ?: @"<nil>";
-}
-
-static NSString *RRBooleanValue(id object, NSString *selectorName) {
+static BOOL RRCallBooleanGetter(id object, NSString *selectorName, BOOL *available) {
     SEL selector = NSSelectorFromString(selectorName);
     if (object == nil || ![object respondsToSelector:selector]) {
-        return @"<unavailable>";
+        if (available != NULL) *available = NO;
+        return NO;
     }
-
+    if (available != NULL) *available = YES;
     BOOL (*sendMessage)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
-    return sendMessage(object, selector) ? @"YES" : @"NO";
-}
-
-static BOOL RRHasObjectValue(id object, NSString *selectorName) {
-    id value = RRRawObjectValue(object, selectorName);
-    return value != nil && value != NSNull.null &&
-           !([value isKindOfClass:NSString.class] && [(NSString *)value length] == 0);
-}
-
-static BOOL RRSelectorLooksRelevant(NSString *selectorName) {
-    NSArray<NSString *> *terms = @[@"ring", @"tone", @"sound", @"alert", @"contact"];
-    for (NSString *term in terms) {
-        if ([selectorName rangeOfString:term options:NSCaseInsensitiveSearch].location != NSNotFound) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static void RRLogRelevantSelectors(Class targetClass) {
-    if (targetClass == Nil) return;
-
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        RRLoggedRuntimeClasses = [NSMutableSet set];
-    });
-
-    NSString *className = NSStringFromClass(targetClass);
-    @synchronized (RRLoggedRuntimeClasses) {
-        if ([RRLoggedRuntimeClasses containsObject:className]) return;
-        [RRLoggedRuntimeClasses addObject:className];
-    }
-
-    NSMutableOrderedSet<NSString *> *selectors = [NSMutableOrderedSet orderedSet];
-    for (Class current = targetClass; current != Nil && current != NSObject.class;
-         current = class_getSuperclass(current)) {
-        unsigned int count = 0;
-        Method *methods = class_copyMethodList(current, &count);
-        for (unsigned int index = 0; index < count; index++) {
-            NSString *name = NSStringFromSelector(method_getName(methods[index]));
-            if (RRSelectorLooksRelevant(name)) [selectors addObject:name];
-        }
-        free(methods);
-    }
-
-    RRLog(@"event=relevant-selectors class=%@ selectors=%@",
-          className, [[selectors array] componentsJoinedByString:@","]);
-}
-
-static void RRLogToneManagerCapabilities(void) {
-    Class managerClass = objc_getClass("TLToneManager");
-    if (managerClass == Nil) {
-        if (!RRDidLogToneManagerAbsence) {
-            RRDidLogToneManagerAbsence = YES;
-            RRLog(@"event=tone-manager-present value=NO");
-        }
-        return;
-    }
-    if (RRDidLogToneManagerCapabilities) return;
-    RRDidLogToneManagerCapabilities = YES;
-
-    RRLog(@"event=tone-manager-present value=YES");
-    RRLogRelevantSelectors(managerClass);
-    const char *instanceSelectors[] = {
-        "nameForToneIdentifier:",
-        "filePathForToneIdentifier:",
-        "defaultRingtoneIdentifier",
-        "toneWithIdentifierIsValid:",
-        "currentToneIdentifierForAlertType:",
-    };
-    for (size_t index = 0; index < sizeof(instanceSelectors) / sizeof(instanceSelectors[0]); index++) {
-        SEL selector = sel_registerName(instanceSelectors[index]);
-        Method method = class_getInstanceMethod(managerClass, selector);
-        if (method != NULL) {
-            RRLog(@"event=tone-manager-method selector=%s encoding=%s",
-                  instanceSelectors[index], method_getTypeEncoding(method));
-        }
-    }
-
-    Method sharedManager = class_getClassMethod(managerClass, sel_registerName("sharedToneManager"));
-    if (sharedManager != NULL) {
-        RRLog(@"event=tone-manager-method selector=sharedToneManager encoding=%s",
-              method_getTypeEncoding(sharedManager));
-    }
-}
-
-static long long RRLongLongValue(id object, NSString *selectorName) {
-    SEL selector = NSSelectorFromString(selectorName);
-    if (object == nil || ![object respondsToSelector:selector]) {
-        return LLONG_MIN;
-    }
-
-    long long (*sendMessage)(id, SEL) = (long long (*)(id, SEL))objc_msgSend;
     return sendMessage(object, selector);
 }
 
-static unsigned long long RRUnsignedLongLongValue(id object, NSString *selectorName) {
+static unsigned int RRUnsignedIntGetter(id object, NSString *selectorName) {
     SEL selector = NSSelectorFromString(selectorName);
-    if (object == nil || ![object respondsToSelector:selector]) {
-        return ULLONG_MAX;
-    }
+    if (object == nil || ![object respondsToSelector:selector]) return 0;
+    unsigned int (*sendMessage)(id, SEL) = (unsigned int (*)(id, SEL))objc_msgSend;
+    return sendMessage(object, selector);
+}
 
+static unsigned long long RRUnsignedLongLongGetter(id object, NSString *selectorName) {
+    SEL selector = NSSelectorFromString(selectorName);
+    if (object == nil || ![object respondsToSelector:selector]) return ULLONG_MAX;
     unsigned long long (*sendMessage)(id, SEL) =
         (unsigned long long (*)(id, SEL))objc_msgSend;
     return sendMessage(object, selector);
 }
 
-static double RRDoubleValue(id object, NSString *selectorName) {
+static long long RRIntegerGetter(id object, NSString *selectorName, BOOL *available) {
     SEL selector = NSSelectorFromString(selectorName);
     if (object == nil || ![object respondsToSelector:selector]) {
-        return -1.0;
+        if (available != NULL) *available = NO;
+        return LLONG_MIN;
     }
-
-    double (*sendMessage)(id, SEL) = (double (*)(id, SEL))objc_msgSend;
+    if (available != NULL) *available = YES;
+    long long (*sendMessage)(id, SEL) = (long long (*)(id, SEL))objc_msgSend;
     return sendMessage(object, selector);
 }
 
-static NSString *RRCallSummary(id call) {
-    if (call == nil || call == NSNull.null) {
-        return @"<nil>";
-    }
-
-    RRLogRelevantSelectors(object_getClass(call));
-    id model = RRRawObjectValue(call, @"model");
-    if (model != nil) RRLogRelevantSelectors(object_getClass(model));
-
-    return [NSString stringWithFormat:@"incoming=%@ hasContact=%@ status=%lld",
-                                      RRBooleanValue(call, @"isIncoming"),
-                                      RRHasObjectValue(call, @"contactIdentifier") ? @"YES" : @"NO",
-                                      RRLongLongValue(call, @"callStatus")];
+static NSString *RRStringValue(id value) {
+    return [value isKindOfClass:NSString.class] && [value length] > 0 ? value : nil;
 }
 
-static NSString *RRDescriptorSummary(id descriptor) {
-    if (descriptor == nil || descriptor == NSNull.null) {
-        return @"<nil>";
+static NSString *RRCallStableIdentifier(id call) {
+    id identifier = RRCallObjectGetter(call, @"callUUID");
+    if (identifier == nil) identifier = RRCallObjectGetter(call, @"uniqueProxyIdentifierUUID");
+    NSString *string = RRStringValue(identifier);
+    if (string != nil) return string;
+
+    SEL uuidString = NSSelectorFromString(@"UUIDString");
+    if ([identifier respondsToSelector:uuidString]) {
+        id (*sendMessage)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+        return RRStringValue(sendMessage(identifier, uuidString));
+    }
+    return nil;
+}
+
+static BOOL RRCallHasContactInfo(id call) {
+    if (RRStringValue(RRCallObjectGetter(call, @"contactIdentifier")) != nil) return YES;
+
+    id identifiers = RRCallObjectGetter(call, @"contactIdentifiers");
+    if ([identifiers isKindOfClass:NSArray.class] && [(NSArray *)identifiers count] > 0) return YES;
+
+    id displayContext = RRCallObjectGetter(call, @"displayContext");
+    id legacyIdentifier = RRCallObjectGetter(displayContext, @"legacyAddressBookIdentifier");
+    return legacyIdentifier != nil && legacyIdentifier != NSNull.null;
+}
+
+static BOOL RRCallIsIncomingCellular(id call) {
+    BOOL hasIncomingProperty = NO;
+    if (!RRCallBooleanGetter(call, @"isIncoming", &hasIncomingProperty) || !hasIncomingProperty) return NO;
+
+    BOOL hasVoIPProperty = NO;
+    if (RRCallBooleanGetter(call, @"isVoIPCall", &hasVoIPProperty) && hasVoIPProperty) return NO;
+
+    id provider = RRCallObjectGetter(call, @"provider");
+    BOOL hasTelephonyProperty = NO;
+    return RRCallBooleanGetter(provider, @"isTelephonyProvider", &hasTelephonyProperty) &&
+           hasTelephonyProperty;
+}
+
+static BOOL RRCallHasContactTone(id call) {
+    return [objc_getAssociatedObject(call, &RRContactToneFoundKey) boolValue];
+}
+
+static BOOL RRCallContactToneWasChecked(id call) {
+    return [objc_getAssociatedObject(call, &RRContactToneCheckedKey) boolValue];
+}
+
+static void RRRecordAddressBookToneLookup(CFTypeRef toneIdentifier) {
+    id call = (__bridge id)RRCurrentCall;
+    if (call == nil) return;
+
+    objc_setAssociatedObject(call, &RRContactToneCheckedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (toneIdentifier != NULL) {
+        objc_setAssociatedObject(call, &RRContactToneFoundKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+static id RRToneManager(void) {
+    static id sharedManager;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dlopen("/System/Library/PrivateFrameworks/ToneLibrary.framework/ToneLibrary", RTLD_LAZY);
+        Class managerClass = objc_getClass("TLToneManager");
+        SEL sharedSelector = NSSelectorFromString(@"sharedToneManager");
+        if (managerClass != Nil && [managerClass respondsToSelector:sharedSelector]) {
+            id (*sendMessage)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+            sharedManager = sendMessage(managerClass, sharedSelector);
+        }
+    });
+    return sharedManager;
+}
+
+static BOOL RRToneIdentifierIsValid(id manager, NSString *identifier) {
+    SEL selector = NSSelectorFromString(@"toneWithIdentifierIsValid:");
+    if (manager == nil || ![manager respondsToSelector:selector]) return NO;
+    BOOL (*sendMessage)(id, SEL, id) = (BOOL (*)(id, SEL, id))objc_msgSend;
+    return sendMessage(manager, selector, identifier);
+}
+
+static NSArray<NSString *> *RRValidSelectedToneIdentifiers(id manager) {
+    CFPropertyListRef value = CFPreferencesCopyAppValue(
+        (__bridge CFStringRef)RR_PREFERENCE_SELECTED_TONE_IDS_KEY,
+        CFSTR(RR_PREFERENCES_DOMAIN));
+    id configured = CFBridgingRelease(value);
+    if (![configured isKindOfClass:NSArray.class]) return @[];
+
+    NSMutableOrderedSet<NSString *> *valid = [NSMutableOrderedSet orderedSet];
+    for (id item in (NSArray *)configured) {
+        NSString *identifier = RRStringValue(item);
+        if (identifier != nil && RRToneIdentifierIsValid(manager, identifier)) {
+            [valid addObject:identifier];
+        }
+    }
+    return valid.array;
+}
+
+static unsigned int RRSoundIDForToneIdentifier(id manager, NSString *identifier) {
+    SEL soundForTone = NSSelectorFromString(@"_soundForToneIdentifier:");
+    if (manager == nil || ![manager respondsToSelector:soundForTone]) return 0;
+    id (*sendMessage)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+    id sound = sendMessage(manager, soundForTone, identifier);
+    return RRUnsignedIntGetter(sound, @"soundID");
+}
+
+static uint32_t RRBoundedRandom(uint32_t upperBound, void *context) {
+    (void)context;
+    return arc4random_uniform(upperBound);
+}
+
+static NSString *RRChooseToneIdentifier(NSArray<NSString *> *identifiers) {
+    if (identifiers.count == 0 || identifiers.count > UINT32_MAX) return nil;
+
+    NSMutableData *pointerStorage = [NSMutableData dataWithLength:identifiers.count * sizeof(const char *)];
+    const char **candidates = (const char **)pointerStorage.mutableBytes;
+    for (NSUInteger index = 0; index < identifiers.count; index++) {
+        candidates[index] = identifiers[index].UTF8String;
     }
 
-    return [NSString stringWithFormat:@"soundType=%lld sound=%@ iterations=%llu pause=%.3f",
-                                      RRLongLongValue(descriptor, @"soundType"),
-                                      RRObjectValue(descriptor, @"sound"),
-                                      RRUnsignedLongLongValue(descriptor, @"iterations"),
-                                      RRDoubleValue(descriptor, @"pauseDuration")];
+    RRSelectionResult selection = RRSelectTone(true, false, candidates, identifiers.count,
+                                                RRBoundedRandom, NULL);
+    if (selection.useOriginalTone || selection.toneIdentifier == NULL) return nil;
+    return [NSString stringWithUTF8String:selection.toneIdentifier];
+}
+
+static unsigned int RRRandomSoundIDForCall(id call, id manager) {
+    if (call == nil || manager == nil) return 0;
+
+    CFPropertyListRef enabledValue = CFPreferencesCopyAppValue(
+        (__bridge CFStringRef)RR_PREFERENCE_ENABLED_KEY,
+        CFSTR(RR_PREFERENCES_DOMAIN));
+    id enabledObject = CFBridgingRelease(enabledValue);
+    if (![enabledObject boolValue]) return 0;
+
+    NSArray<NSString *> *identifiers = RRValidSelectedToneIdentifiers(manager);
+    if (identifiers.count == 0) return 0;
+
+    id state = objc_getAssociatedObject(call, &RRCallToneStateKey);
+    NSString *stableIdentifier = RRCallStableIdentifier(call);
+    if (state == nil && stableIdentifier != nil) {
+        state = [RRToneCache() objectForKey:stableIdentifier];
+    }
+
+    if (state == NSNull.null) return 0;
+    if ([state isKindOfClass:NSDictionary.class]) {
+        NSString *identifier = state[@"identifier"];
+        if (!RRToneIdentifierIsValid(manager, identifier)) return 0;
+        return [state[@"soundID"] unsignedIntValue];
+    }
+
+    NSString *identifier = RRChooseToneIdentifier(identifiers);
+    if (identifier == nil) {
+        objc_setAssociatedObject(call, &RRCallToneStateKey, NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (stableIdentifier != nil) [RRToneCache() setObject:NSNull.null forKey:stableIdentifier];
+        return 0;
+    }
+
+    unsigned int soundID = RRSoundIDForToneIdentifier(manager, identifier);
+    if (soundID == 0) {
+        objc_setAssociatedObject(call, &RRCallToneStateKey, NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (stableIdentifier != nil) [RRToneCache() setObject:NSNull.null forKey:stableIdentifier];
+        return 0;
+    }
+
+    NSDictionary *selection = @{ @"identifier": identifier, @"soundID": @(soundID) };
+    objc_setAssociatedObject(call, &RRCallToneStateKey, selection, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (stableIdentifier != nil) {
+        [RRToneCache() setObject:selection forKey:stableIdentifier];
+    }
+    return soundID;
+}
+
+static void RRMaybeRandomizeDescriptor(id descriptor) {
+    id call = objc_getAssociatedObject(descriptor, &RRDescriptorCallKey);
+    if (call == nil) call = (__bridge id)RRCurrentCall;
+    if (!RRCallIsIncomingCellular(call)) return;
+    if (RRCallHasContactTone(call)) return;
+    BOOL hasKnownCallerProperty = NO;
+    BOOL knownCaller = RRCallBooleanGetter(call, @"isKnownCaller", &hasKnownCallerProperty);
+    if ((RRCallHasContactInfo(call) || (hasKnownCallerProperty && knownCaller)) &&
+        !RRCallContactToneWasChecked(call)) return;
+
+    BOOL hasSoundType = NO;
+    long long soundType = RRIntegerGetter(descriptor, @"soundType", &hasSoundType);
+    if (!hasSoundType || soundType != RRIncomingRingtoneSoundType) return;
+    if (RRUnsignedLongLongGetter(descriptor, @"iterations") != ULLONG_MAX) return;
+
+    id manager = RRToneManager();
+    unsigned int soundID = RRRandomSoundIDForCall(call, manager);
+    if (soundID == 0) return;
+
+    SEL setter = NSSelectorFromString(@"setSound:");
+    if (![descriptor respondsToSelector:setter]) return;
+    void (*sendMessage)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
+    sendMessage(descriptor, setter, @(soundID));
+}
+
+static id RRHookInitDescriptor(id self, SEL selector, long long soundType, id call) {
+    void *previousCall = RRCurrentCall;
+    RRCurrentCall = (__bridge void *)call;
+    id descriptor = RROriginalInitDescriptor(self, selector, soundType, call);
+    RRCurrentCall = previousCall;
+
+    if (descriptor != nil && call != nil) {
+        objc_setAssociatedObject(descriptor, &RRDescriptorCallKey, call, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return descriptor;
 }
 
 static BOOL RRHookPlaySoundType(id self, SEL selector, long long soundType, id call) {
-    RRLog(@"event=call-sound selector=%@ soundType=%lld %@",
-          NSStringFromSelector(selector), soundType, RRCallSummary(call));
-    return RROriginalPlaySoundType(self, selector, soundType, call);
+    void *previousCall = RRCurrentCall;
+    RRCurrentCall = (__bridge void *)call;
+    BOOL result = RROriginalPlaySoundType(self, selector, soundType, call);
+    RRCurrentCall = previousCall;
+    return result;
 }
 
 static BOOL RRHookPlaySoundTypeCompletion(id self,
@@ -233,14 +323,17 @@ static BOOL RRHookPlaySoundTypeCompletion(id self,
                                           long long soundType,
                                           id call,
                                           id completion) {
-    RRLog(@"event=call-sound selector=%@ soundType=%lld %@",
-          NSStringFromSelector(selector), soundType, RRCallSummary(call));
-    return RROriginalPlaySoundTypeCompletion(self, selector, soundType, call, completion);
+    void *previousCall = RRCurrentCall;
+    RRCurrentCall = (__bridge void *)call;
+    BOOL result = RROriginalPlaySoundTypeCompletion(self, selector, soundType, call, completion);
+    RRCurrentCall = previousCall;
+    return result;
 }
 
 static BOOL RRHookPlayDescriptor(id self, SEL selector, id descriptor) {
-    RRLog(@"event=descriptor selector=%@ %@",
-          NSStringFromSelector(selector), RRDescriptorSummary(descriptor));
+    @autoreleasepool {
+        RRMaybeRandomizeDescriptor(descriptor);
+    }
     return RROriginalPlayDescriptor(self, selector, descriptor);
 }
 
@@ -248,83 +341,117 @@ static BOOL RRHookPlayDescriptorCompletion(id self,
                                            SEL selector,
                                            id descriptor,
                                            id completion) {
-    RRLog(@"event=descriptor selector=%@ %@",
-          NSStringFromSelector(selector), RRDescriptorSummary(descriptor));
+    @autoreleasepool {
+        RRMaybeRandomizeDescriptor(descriptor);
+    }
     return RROriginalPlayDescriptorCompletion(self, selector, descriptor, completion);
+}
+
+static CFTypeRef RRHookIndividualContactSoundLookup(const void *record, int32_t identifier) {
+    CFTypeRef result = RROriginalIndividualContactSoundLookup(record, identifier);
+    RRRecordAddressBookToneLookup(result);
+    return result;
+}
+
+static CFTypeRef RRHookLinkedContactSoundLookup(const void *record, int32_t identifier) {
+    CFTypeRef result = RROriginalLinkedContactSoundLookup(record, identifier);
+    RRRecordAddressBookToneLookup(result);
+    return result;
+}
+
+static CFTypeRef RRHookContactSoundLookup(const void *record, int32_t identifier) {
+    CFTypeRef result = RROriginalContactSoundLookup(record, identifier);
+    RRRecordAddressBookToneLookup(result);
+    return result;
 }
 
 static BOOL RRInstallInstanceHook(Class targetClass,
                                   SEL selector,
                                   IMP replacement,
-                                  IMP *original,
-                                  NSString *label) {
-    Method method = class_getInstanceMethod(targetClass, selector);
-    if (method == NULL) {
-        return NO;
+                                  IMP *original) {
+    if (targetClass == Nil || class_getInstanceMethod(targetClass, selector) == NULL) return NO;
+    MSHookMessageEx(targetClass, selector, replacement, original);
+    return YES;
+}
+
+static void RRInstallAddressBookHooks(void) {
+    if (RRDidHookAddressBook) return;
+    void *handle = dlopen("/System/Library/PrivateFrameworks/AddressBookLegacy.framework/AddressBookLegacy",
+                          RTLD_LAZY);
+    if (handle == NULL) return;
+
+    void *individual = dlsym(handle,
+        "ABPersonCopySoundIdentifierForMultiValueIdentifierForIndividualContact");
+    if (individual != NULL) {
+        MSHookFunction(individual, (void *)RRHookIndividualContactSoundLookup,
+                       (void **)&RROriginalIndividualContactSoundLookup);
     }
 
-    MSHookMessageEx(targetClass, selector, replacement, original);
-    RRLog(@"event=hook-installed class=%@ selector=%@ encoding=%s",
-          label, NSStringFromSelector(selector), method_getTypeEncoding(method));
-    return YES;
+    void *linked = dlsym(handle,
+        "ABPersonCopySoundIdentifierForMultiValueIdentifierIncludingLinkedContacts");
+    if (linked != NULL) {
+        MSHookFunction(linked, (void *)RRHookLinkedContactSoundLookup,
+                       (void **)&RROriginalLinkedContactSoundLookup);
+    }
+
+    void *generic = dlsym(handle, "ABPersonCopySoundIdentifierForMultiValueIdentifier");
+    if (generic != NULL) {
+        MSHookFunction(generic, (void *)RRHookContactSoundLookup,
+                       (void **)&RROriginalContactSoundLookup);
+    }
+
+    RRDidHookAddressBook = RROriginalIndividualContactSoundLookup != NULL ||
+                           RROriginalLinkedContactSoundLookup != NULL ||
+                           RROriginalContactSoundLookup != NULL;
 }
 
 static void RRInstallHooks(void) {
     Class playerClass = objc_getClass("TUCallSoundPlayer");
     if (playerClass != Nil) {
-        if (!RRDidHookPlaySoundType) {
+        if (RROriginalPlaySoundType == NULL) {
             RRDidHookPlaySoundType = RRInstallInstanceHook(
                 playerClass,
                 NSSelectorFromString(@"attemptToPlaySoundType:forCall:"),
                 (IMP)RRHookPlaySoundType,
-                (IMP *)&RROriginalPlaySoundType,
-                @"TUCallSoundPlayer");
+                (IMP *)&RROriginalPlaySoundType);
         }
-        if (!RRDidHookPlaySoundTypeCompletion) {
+        if (RROriginalPlaySoundTypeCompletion == NULL) {
             RRDidHookPlaySoundTypeCompletion = RRInstallInstanceHook(
                 playerClass,
                 NSSelectorFromString(@"attemptToPlaySoundType:forCall:completion:"),
                 (IMP)RRHookPlaySoundTypeCompletion,
-                (IMP *)&RROriginalPlaySoundTypeCompletion,
-                @"TUCallSoundPlayer");
+                (IMP *)&RROriginalPlaySoundTypeCompletion);
         }
-        if (!RRDidHookPlayDescriptor) {
+        if (RROriginalPlayDescriptor == NULL) {
             RRDidHookPlayDescriptor = RRInstallInstanceHook(
                 playerClass,
                 NSSelectorFromString(@"attemptToPlayDescriptor:"),
                 (IMP)RRHookPlayDescriptor,
-                (IMP *)&RROriginalPlayDescriptor,
-                @"TUCallSoundPlayer");
+                (IMP *)&RROriginalPlayDescriptor);
         }
-        if (!RRDidHookPlayDescriptorCompletion) {
+        if (RROriginalPlayDescriptorCompletion == NULL) {
             RRDidHookPlayDescriptorCompletion = RRInstallInstanceHook(
                 playerClass,
                 NSSelectorFromString(@"attemptToPlayDescriptor:completion:"),
                 (IMP)RRHookPlayDescriptorCompletion,
-                (IMP *)&RROriginalPlayDescriptorCompletion,
-                @"TUCallSoundPlayer");
+                (IMP *)&RROriginalPlayDescriptorCompletion);
         }
     }
 
-    if (objc_getClass("TUCallSoundPlayerDescriptor") != Nil) {
-        Class descriptorClass = objc_getClass("TUCallSoundPlayerDescriptor");
-        Method initMethod = class_getInstanceMethod(
-            descriptorClass, NSSelectorFromString(@"initWithSoundType:call:"));
-        RRLog(@"event=class-present class=TUCallSoundPlayerDescriptor initEncoding=%s",
-              initMethod ? method_getTypeEncoding(initMethod) : "<missing-init>");
+    Class descriptorClass = objc_getClass("TUCallSoundPlayerDescriptor");
+    if (descriptorClass != Nil && RROriginalInitDescriptor == NULL) {
+        RRDidHookInitDescriptor = RRInstallInstanceHook(
+            descriptorClass,
+            NSSelectorFromString(@"initWithSoundType:call:"),
+            (IMP)RRHookInitDescriptor,
+            (IMP *)&RROriginalInitDescriptor);
     }
 
-    RRLogToneManagerCapabilities();
-
-    if (playerClass == Nil && RRInstallAttempts == 0) {
-        RRLog(@"event=class-missing class=TUCallSoundPlayer");
-    }
+    RRInstallAddressBookHooks();
 }
 
 static void RRScheduleInstallPoll(void) {
-    if (RRInstallPollScheduled || RRInstallAttempts >= 40) {
-        return;
-    }
+    if (RRInstallPollScheduled || RRInstallAttempts >= 40) return;
 
     RRInstallPollScheduled = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
@@ -333,22 +460,17 @@ static void RRScheduleInstallPoll(void) {
         RRInstallAttempts += 1;
         RRInstallHooks();
 
-        BOOL allExpectedHooksInstalled = RRDidHookPlaySoundType ||
-                                         RRDidHookPlaySoundTypeCompletion ||
-                                         RRDidHookPlayDescriptor ||
-                                         RRDidHookPlayDescriptorCompletion;
-        if (!allExpectedHooksInstalled) {
-            RRScheduleInstallPoll();
-        }
+        BOOL hooksInstalled = RRDidHookPlaySoundType || RRDidHookPlaySoundTypeCompletion ||
+                              RRDidHookPlayDescriptor || RRDidHookPlayDescriptorCompletion ||
+                              RRDidHookInitDescriptor;
+        if (!hooksInstalled || !RRDidHookAddressBook) RRScheduleInstallPoll();
     });
 }
 
 __attribute__((constructor))
 static void RRInitialize(void) {
     @autoreleasepool {
-        RRLog(@"event=process-loaded");
         RRInstallHooks();
-        RRLogToneManagerCapabilities();
         RRScheduleInstallPoll();
     }
 }
