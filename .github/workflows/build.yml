@@ -56,7 +56,30 @@ jobs:
           file packages/*.deb
           ar -t packages/*.deb
           find .theos -name RadromRingProbe.dylib -exec file {} \;
-          dpkg-deb --contents packages/*.deb | grep -E 'RadromRingPrefs.bundle|PreferenceLoader/Preferences/RadromRingPrefs.plist'
+          python3 - <<'PY'
+          import glob
+          import io
+          import lzma
+          import subprocess
+          import tarfile
+
+          packages = glob.glob("packages/*.deb")
+          if len(packages) != 1:
+              raise SystemExit(f"Expected one package, found {len(packages)}")
+          payload = subprocess.check_output(["ar", "p", packages[0], "data.tar.lzma"])
+          data = lzma.decompress(payload)
+          with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+              paths = [member.name.lstrip("./") for member in archive.getmembers()]
+          expected = (
+              "Library/PreferenceBundles/RadromRingPrefs.bundle/RadromRingPrefs",
+              "Library/PreferenceBundles/RadromRingPrefs.bundle/Info.plist",
+              "Library/PreferenceLoader/Preferences/RadromRingPrefs.plist",
+          )
+          missing = [suffix for suffix in expected if not any(path.endswith(suffix) for path in paths)]
+          if missing:
+              raise SystemExit(f"Package is missing: {', '.join(missing)}")
+          print("Preference bundle and Settings entry are present in the package")
+          PY
           shasum -a 256 packages/*.deb
 
       - name: Upload deb
