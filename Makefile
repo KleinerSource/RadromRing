@@ -22,3 +22,6 @@ RadromRingPrefs_CFLAGS := -fobjc-arc
 RadromRingPrefs_LDFLAGS := -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
+
+before-package::
+	chmod 0755 $(THEOS_STAGING_DIR)/DEBIAN/postinst $(THEOS_STAGING_DIR)/DEBIAN/postrm

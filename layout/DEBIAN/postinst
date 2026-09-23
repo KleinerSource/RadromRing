@@ -1,0 +1,4 @@
+#!/bin/sh
+# Tweaks load only at process launch; restart the call processes so the new dylib takes effect.
+killall -9 InCallService callservicesd >/dev/null 2>&1 || true
+exit 0

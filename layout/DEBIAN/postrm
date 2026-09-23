@@ -1,0 +1,4 @@
+#!/bin/sh
+# Drop the unloaded dylib from the call processes.
+killall -9 InCallService callservicesd >/dev/null 2>&1 || true
+exit 0
