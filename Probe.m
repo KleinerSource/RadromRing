@@ -470,6 +470,8 @@ static void RRScheduleInstallPoll(void) {
 __attribute__((constructor))
 static void RRInitialize(void) {
     @autoreleasepool {
+        if (![[NSProcessInfo processInfo].processName isEqualToString:@"SpringBoard"]) return;
+
         RRInstallHooks();
         RRScheduleInstallPoll();
     }

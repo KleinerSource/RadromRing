@@ -18,4 +18,4 @@ Theos/RootHide 编译只在 GitHub Actions 执行。运行 `.github/workflows/bu
 
 ## 设备验证
 
-目标设备为 iPhone 14 Pro（`iPhone15,2`）、iOS 17.0（`21A329`）、Relaxin 0.5.3 / ElleKit 1.2-1。0.3.0 仍需在该设备验证安装、重启、双卡来电、联系人专属铃声、关闭开关、空列表和铃声删除后的回退行为。
+目标设备为 iPhone 14 Pro（`iPhone15,2`）、iOS 17.0（`21A329`）、Relaxin 0.5.3 / ElleKit 1.2-1。0.3.0 已从设备移除；它注入 `callservicesd` 后用户报告首次通话失败。当前源码的 0.3.1 修改为只允许 `SpringBoard` 加载，但尚未通过 GitHub Actions 构建或设备验证。完成无 tweak 通话基线确认后，再构建和验证双卡来电、联系人专属铃声、关闭开关、空列表及铃声删除后的回退行为。
