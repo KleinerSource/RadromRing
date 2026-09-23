@@ -42,7 +42,8 @@ jobs:
 
       - name: Verify package
         run: |
-          dpkg-deb --info packages/*.deb
+          file packages/*.deb
+          ar -t packages/*.deb
           find .theos -name RadromRingProbe.dylib -exec file {} \;
           shasum -a 256 packages/*.deb
 
