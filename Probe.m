@@ -10,7 +10,7 @@
 #import <stdarg.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const RRProbeLogPath = @"/var/mobile/Library/Logs/RadromRingProbe.log";
+static NSString *const RRProbeLogPath = @"/var/mobile/Library/Caches/RadromRingProbe.log";
 
 typedef BOOL (*RRPlaySoundTypeIMP)(id, SEL, long long, id);
 typedef BOOL (*RRPlaySoundTypeCompletionIMP)(id, SEL, long long, id, id);

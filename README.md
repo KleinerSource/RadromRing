@@ -13,7 +13,7 @@
 安装探针包后，进行至少一次未知来电和一次设置了专属铃声的联系人来电。探针日志位于：
 
 ```text
-/var/mobile/Library/Logs/RadromRingProbe.log
+/var/mobile/Library/Caches/RadromRingProbe.log
 ```
 
-日志只含声音类型/声音 ID、来电 UUID 与联系人记录 ID；不读取电话号码或联系人姓名。将日志取回后即可确定正式 tweak 的目标进程、selector 和联系人专属铃声判定点。
+日志只含声音类型/声音 ID、来电状态和联系人匹配状态；不记录来电 UUID、联系人记录 ID、电话号码或联系人姓名。将日志取回后即可确定正式 tweak 的目标进程、selector 和联系人专属铃声判定点。
