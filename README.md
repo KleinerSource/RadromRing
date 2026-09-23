@@ -4,6 +4,8 @@
 
 当前包是只读运行时探针：它确认来电铃声相关类、进程、声音类型和声音 ID；不会改铃声或联系人。取得目标设备的调用记录后，再将诊断 hook 替换成随机铃声逻辑和“设置”配置页。
 
+核心选择策略已独立实现并由 Actions 在 macOS runner 上测试：停用、空铃声池或联系人有专属铃声时沿用系统原结果；否则从经过系统目录校验的选中铃声中抽选。
+
 ## GitHub Actions 构建
 
 所有 Theos/RootHide 编译都由 `.github/workflows/build.yml` 中的 GitHub Actions 完成。构建成功后，下载 `RadromRing-probe-roothide` artifact 中的 `.deb`。

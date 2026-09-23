@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := RadromRingProbe
 
-RadromRingProbe_FILES := Probe.m
+RadromRingProbe_FILES := Probe.m core/RRSelection.c
 RadromRingProbe_CFLAGS := -fobjc-arc
 RadromRingProbe_FRAMEWORKS := Foundation
 

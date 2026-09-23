@@ -9,8 +9,10 @@ on:
       - .github/workflows/build.yml
       - Makefile
       - control
+      - core/**
       - RadromRingProbe.plist
       - Probe.m
+      - tests/**
       - tools/**
 
 permissions:
@@ -36,6 +38,13 @@ jobs:
 
       - name: Check probe script syntax
         run: node --check tools/probe-call-ringtone.js
+
+      - name: Test tone selection policy
+        run: |
+          clang -std=c11 -Wall -Wextra -Werror -Icore \
+            core/RRSelection.c tests/RRSelectionTests.c \
+            -o "$RUNNER_TEMP/rr-selection-tests"
+          "$RUNNER_TEMP/rr-selection-tests"
 
       - name: Build package
         run: make clean package FINALPACKAGE=1
