@@ -5,4 +5,5 @@ findings.md
 progress.md
 .gitignore
 task_plan.md
-tools/
+tools/*
+!tools/build_repo.py
