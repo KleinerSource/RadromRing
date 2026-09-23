@@ -22,9 +22,14 @@ if (!ObjC.available) {
 
     try {
       const call = new ObjC.Object(pointer);
+      const provider = call.respondsToSelector_(ObjC.selector("provider")) ? call.provider() : null;
+      const identifiers = valueFor(call, "contactIdentifiers");
       return {
         incoming: valueFor(call, "isIncoming"),
+        voip: valueFor(call, "isVoIPCall"),
+        telephonyProvider: valueFor(provider, "isTelephonyProvider"),
         hasContactIdentifier: valueFor(call, "contactIdentifier") !== null,
+        hasContactIdentifiers: identifiers !== null && identifiers !== "()",
         callStatus: valueFor(call, "callStatus"),
       };
     } catch (error) {
