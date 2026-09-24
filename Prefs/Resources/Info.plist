@@ -5,19 +5,19 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleExecutable</key>
-	<string>RadromRingPrefs</string>
+	<string>RandomRingPrefs</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.kleinersource.radromring.prefs</string>
+	<string>com.kleinersource.randomring.prefs</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>RadromRing</string>
+	<string>RandomRing</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.6.0</string>
+	<string>0.7.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.6.0</string>
+	<string>0.7.0</string>
 	<key>NSPrincipalClass</key>
 	<string>RRRootListController</string>
 </dict>

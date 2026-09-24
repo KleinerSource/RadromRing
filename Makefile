@@ -7,22 +7,22 @@ RR_AUTHOR := $(shell sed -n 's/^Author:[[:space:]]*//p' control)
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME := RadromRingProbe
+TWEAK_NAME := RandomRingProbe
 
-RadromRingProbe_FILES := Probe.m core/RRSelection.c
-RadromRingProbe_CFLAGS := -fobjc-arc
-RadromRingProbe_FRAMEWORKS := Foundation
+RandomRingProbe_FILES := Probe.m core/RRSelection.c
+RandomRingProbe_CFLAGS := -fobjc-arc
+RandomRingProbe_FRAMEWORKS := Foundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-BUNDLE_NAME := RadromRingPrefs
+BUNDLE_NAME := RandomRingPrefs
 
-RadromRingPrefs_FILES := Prefs/RRRootListController.m
-RadromRingPrefs_FRAMEWORKS := UIKit
-RadromRingPrefs_INSTALL_PATH := /Library/PreferenceBundles
-RadromRingPrefs_RESOURCE_DIRS := Prefs/Resources
-RadromRingPrefs_CFLAGS := -fobjc-arc -DRR_VERSION='"$(RR_VERSION)"' -DRR_AUTHOR='"$(RR_AUTHOR)"'
-RadromRingPrefs_LDFLAGS := -undefined dynamic_lookup
+RandomRingPrefs_FILES := Prefs/RRRootListController.m
+RandomRingPrefs_FRAMEWORKS := UIKit
+RandomRingPrefs_INSTALL_PATH := /Library/PreferenceBundles
+RandomRingPrefs_RESOURCE_DIRS := Prefs/Resources
+RandomRingPrefs_CFLAGS := -fobjc-arc -DRR_VERSION='"$(RR_VERSION)"' -DRR_AUTHOR='"$(RR_AUTHOR)"'
+RandomRingPrefs_LDFLAGS := -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 

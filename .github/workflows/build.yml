@@ -13,7 +13,7 @@ on:
       - core/**
       - Prefs/**
       - layout/**
-      - RadromRingProbe.plist
+      - RandomRingProbe.plist
       - Probe.m
       - tests/**
       - tools/**
@@ -64,7 +64,7 @@ jobs:
         run: |
           file packages/*.deb
           ar -t packages/*.deb
-          find .theos -name RadromRingProbe.dylib -exec file {} \;
+          find .theos -name RandomRingProbe.dylib -exec file {} \;
           python3 - <<'PY'
           import glob
           import io
@@ -80,10 +80,10 @@ jobs:
           with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
               paths = [member.name.lstrip("./") for member in archive.getmembers()]
           expected = (
-              "Library/PreferenceBundles/RadromRingPrefs.bundle/RadromRingPrefs",
-              "Library/PreferenceBundles/RadromRingPrefs.bundle/Info.plist",
-              "Library/PreferenceBundles/RadromRingPrefs.bundle/icon@3x.png",
-              "Library/PreferenceLoader/Preferences/RadromRingPrefs.plist",
+              "Library/PreferenceBundles/RandomRingPrefs.bundle/RandomRingPrefs",
+              "Library/PreferenceBundles/RandomRingPrefs.bundle/Info.plist",
+              "Library/PreferenceBundles/RandomRingPrefs.bundle/icon@3x.png",
+              "Library/PreferenceLoader/Preferences/RandomRingPrefs.plist",
           )
           missing = [suffix for suffix in expected if not any(path.endswith(suffix) for path in paths)]
           if missing:
@@ -95,7 +95,7 @@ jobs:
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
-          name: RadromRing-roothide
+          name: RandomRing-roothide
           path: packages/*.deb
           if-no-files-found: error
 

@@ -1,7 +1,7 @@
 #ifndef RR_PREFERENCES_H
 #define RR_PREFERENCES_H
 
-#define RR_PREFERENCES_DOMAIN "com.kleinersource.radromring"
+#define RR_PREFERENCES_DOMAIN "com.kleinersource.randomring"
 #define RR_PREFERENCES_PATH "/var/mobile/Library/Preferences/" RR_PREFERENCES_DOMAIN ".plist"
 
 #define RR_PREFERENCE_ENABLED_KEY @"enabled"

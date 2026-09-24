@@ -17,14 +17,14 @@ import sys
 import tarfile
 
 REPO_FIELDS = {
-    "Origin": "RadromRing",
-    "Label": "RadromRing",
+    "Origin": "RandomRing",
+    "Label": "RandomRing",
     "Suite": "stable",
     "Version": "1.0",
     "Codename": "stable",
     "Architectures": "iphoneos-arm64e",
     "Components": "main",
-    "Description": "RadromRing random incoming-call ringtones for RootHide iOS 17.0",
+    "Description": "RandomRing random incoming-call ringtones for RootHide iOS 17.0",
 }
 
 CONTROL_FIELD_ORDER = (

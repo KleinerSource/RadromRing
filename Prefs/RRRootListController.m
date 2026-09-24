@@ -222,7 +222,7 @@ static NSArray<NSDictionary *> *RRDetectSIMs(void) {
         static dispatch_queue_t queue;
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
-            queue = dispatch_queue_create("com.kleinersource.radromring.telephony", DISPATCH_QUEUE_SERIAL);
+            queue = dispatch_queue_create("com.kleinersource.randomring.telephony", DISPATCH_QUEUE_SERIAL);
         });
         id (*initClient)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
         id client = initClient([clientClass alloc], initWithQueue, queue);
@@ -464,7 +464,7 @@ static void RRStoreSIMAccounts(NSArray<NSDictionary *> *sims) {
     }
 
     PSSpecifier *about = [PSSpecifier groupSpecifierWithName:nil];
-    [about setProperty:[NSString stringWithFormat:@"RadromRing v%s\n开发者 %s", RR_VERSION, RR_AUTHOR]
+    [about setProperty:[NSString stringWithFormat:@"RandomRing v%s\n开发者 %s", RR_VERSION, RR_AUTHOR]
                 forKey:@"footerText"];
     [about setProperty:@1 forKey:@"footerAlignment"]; /* NSTextAlignmentCenter */
     [specifiers addObject:about];

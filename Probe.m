@@ -16,7 +16,7 @@
  * configuration names no tone, ToneLibrary plays the user's default ringtone; a
  * contact-specific ringtone arrives as an explicit toneIdentifier instead.
  *
- * RadromRing never reads-and-replaces or writes the user's default. It only gives an
+ * RandomRing never reads-and-replaces or writes the user's default. It only gives an
  * individual ring alert that has no explicit tone a tone of its own, the same way a
  * contact ringtone is supplied. TLToneManager keeps reporting the real default to
  * every caller, and nothing is persisted, so removing the tweak (or leaving the
@@ -270,7 +270,7 @@ static NSString *RRRandomRingtoneIdentifier(void) {
 
     @synchronized (RRStateLock) {
         NSString *identifier = RRPickNewTone(pool.array);
-        NSLog(@"RadromRing: %@ picked %@ (slot %ld, per-SIM %d, %lu candidates, call %@)",
+        NSLog(@"RandomRing: %@ picked %@ (slot %ld, per-SIM %d, %lu candidates, call %@)",
               [NSProcessInfo processInfo].processName, identifier, (long)slot, perSIM,
               (unsigned long)pool.count, call != nil ? @"found" : @"unknown");
         return identifier;
@@ -310,7 +310,7 @@ static id RRHookAlertInit(id self, SEL selector, id configuration, id toneIdenti
     }
 
     NSString *tone = RRAlertTone != NULL ? (__bridge NSString *)RRAlertTone : RRGuardedRandomRingtone();
-    NSLog(@"RadromRing: incoming-call alert in %@ uses %@", [NSProcessInfo processInfo].processName,
+    NSLog(@"RandomRing: incoming-call alert in %@ uses %@", [NSProcessInfo processInfo].processName,
           tone != nil ? @"a random tone" : @"the system tone");
     return RROriginalAlertInit(self, selector, configuration, tone ?: toneIdentifier, vibrationIdentifier);
 }
@@ -337,7 +337,7 @@ static id RRHookAlertWithConfiguration(id self, SEL selector, id configuration) 
 
     void (*sendMessage)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
     sendMessage(copy, setter, tone);
-    NSLog(@"RadromRing: incoming-call alert in %@ uses a random tone (configuration copy)",
+    NSLog(@"RandomRing: incoming-call alert in %@ uses a random tone (configuration copy)",
           [NSProcessInfo processInfo].processName);
 
     RRAlertTone = (__bridge void *)tone;
@@ -346,7 +346,7 @@ static id RRHookAlertWithConfiguration(id self, SEL selector, id configuration) 
     return alert;
 }
 
-/* Guard: a tone RadromRing picked for a single ring must never become the saved default. */
+/* Guard: a tone RandomRing picked for a single ring must never become the saved default. */
 static BOOL RRShouldBlockDefaultWrite(id identifier, long long alertType) {
     if (alertType != RRAlertTypeIncomingCall || RRStringValue(identifier) == nil) return NO;
     BOOL picked = NO;
@@ -354,7 +354,7 @@ static BOOL RRShouldBlockDefaultWrite(id identifier, long long alertType) {
         picked = [RRPickedTones containsObject:identifier];
     }
     if (picked) {
-        NSLog(@"RadromRing: blocked %@ from saving ringtone %@ as the default",
+        NSLog(@"RandomRing: blocked %@ from saving ringtone %@ as the default",
               [NSProcessInfo processInfo].processName, identifier);
     }
     return picked;
@@ -374,7 +374,7 @@ static void RRHookMethod(Class targetClass, SEL selector, IMP replacement, IMP *
     if (*original != NULL || targetClass == Nil) return;
     if (class_getInstanceMethod(targetClass, selector) == NULL) return;
     MSHookMessageEx(targetClass, selector, replacement, original);
-    NSLog(@"RadromRing: hooked %@ %@ in %@", NSStringFromClass(targetClass),
+    NSLog(@"RandomRing: hooked %@ %@ in %@", NSStringFromClass(targetClass),
           NSStringFromSelector(selector), [NSProcessInfo processInfo].processName);
 }
 
