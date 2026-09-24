@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - codex/random-ringtone-implementation
     paths:
       - .github/workflows/build.yml
       - Makefile
@@ -107,13 +106,13 @@ jobs:
           cat "$RUNNER_TEMP/repo/Packages"
 
       - name: Upload repository for Pages
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/random-ringtone-implementation'
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ runner.temp }}/repo
 
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/random-ringtone-implementation'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
