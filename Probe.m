@@ -12,41 +12,43 @@
 #import "core/RRSelection.h"
 
 /*
- * The incoming-call ringtone is resolved through ToneLibrary. Each ring creates a
- * TLAlert of type TLAlertTypeIncomingCall; when its configuration carries no explicit
- * toneIdentifier, ToneLibrary falls back to TLToneManager's current default.
- * Contact-specific ringtones arrive as explicit identifiers, so filling in only the
- * missing identifier keeps them intact, including when a contact's tone equals the
- * default. Every alert gets a fresh pick; the default lookup is also hooked in case
- * the ring is resolved without going through alertWithConfiguration:.
+ * Each incoming-call ring is a TLAlert of type TLAlertTypeIncomingCall. When its
+ * configuration names no tone, ToneLibrary plays the user's default ringtone; a
+ * contact-specific ringtone arrives as an explicit toneIdentifier instead.
+ *
+ * RadromRing never reads-and-replaces or writes the user's default. It only gives an
+ * individual ring alert that has no explicit tone a tone of its own, the same way a
+ * contact ringtone is supplied. TLToneManager keeps reporting the real default to
+ * every caller, and nothing is persisted, so removing the tweak (or leaving the
+ * jailbreak) leaves the system ringtone setting exactly as the user set it.
  */
 
-typedef id (*RRCurrentToneForTypeTopicIMP)(id, SEL, long long, id);
-typedef id (*RRCurrentToneForTypeIMP)(id, SEL, long long);
 typedef id (*RRAlertWithConfigurationIMP)(id, SEL, id);
+typedef id (*RRAlertInitIMP)(id, SEL, id, id, id);
+typedef void (*RRSetToneForTypeIMP)(id, SEL, id, long long);
+typedef void (*RRSetToneForTypeTopicIMP)(id, SEL, id, long long, id);
 typedef id (*RRInitIMP)(id, SEL);
 
-static RRCurrentToneForTypeTopicIMP RROriginalCurrentToneForTypeTopic;
-static RRCurrentToneForTypeIMP RROriginalCurrentToneForType;
 static RRAlertWithConfigurationIMP RROriginalAlertWithConfiguration;
+static RRAlertInitIMP RROriginalAlertInit;
+static RRSetToneForTypeIMP RROriginalSetToneForType;
+static RRSetToneForTypeTopicIMP RROriginalSetToneForTypeTopic;
 static RRInitIMP RROriginalCallInit;
 
 static BOOL RRInstallPollScheduled;
 static NSUInteger RRInstallPollCount;
 static BOOL RRIsInCallService;
 static __thread BOOL RRResolvingTone;
-/* Tone chosen for the alert being created on this thread (unretained; owned by the hook frame). */
+/* Tone already chosen for the alert being created on this thread (owned by the hook frame). */
 static __thread void *RRAlertTone;
 
 static const long long RRAlertTypeIncomingCall = 1;
 static const int RRCallStatusRinging = 4;
-/* Default lookups this soon after a pick belong to the same ring. Not extended by reuse. */
-static const CFAbsoluteTime RRSameRingWindow = 2.0;
 static const NSUInteger RRMaxInstallPolls = 240;
 
 static NSObject *RRStateLock;
 static NSString *RRLastToneIdentifier;
-static CFAbsoluteTime RRLastPickTime;
+static NSMutableSet<NSString *> *RRPickedTones;
 static NSHashTable *RRTrackedCalls;
 
 static NSString *RRStringValue(id value) {
@@ -234,15 +236,12 @@ static NSString *RRPickNewTone(NSArray<NSString *> *pool) {
     if (selection.useOriginalTone || selection.toneIdentifier == NULL) return nil;
 
     RRLastToneIdentifier = [NSString stringWithUTF8String:selection.toneIdentifier];
-    RRLastPickTime = CFAbsoluteTimeGetCurrent();
+    [RRPickedTones addObject:RRLastToneIdentifier];
     return RRLastToneIdentifier;
 }
 
-/*
- * Returns nil whenever the system result should be used unchanged. A new ring
- * (newRing = YES) always gets a fresh pick different from the previous one.
- */
-static NSString *RRRandomRingtoneIdentifier(BOOL newRing) {
+/* A fresh pick for one ring, or nil when the system tone should play unchanged. */
+static NSString *RRRandomRingtoneIdentifier(void) {
     NSDictionary *preferences = RRPreferences();
     if (![preferences[RR_PREFERENCE_ENABLED_KEY] boolValue]) return nil;
 
@@ -270,11 +269,6 @@ static NSString *RRRandomRingtoneIdentifier(BOOL newRing) {
     if (pool.count == 0) return nil;
 
     @synchronized (RRStateLock) {
-        CFAbsoluteTime elapsed = CFAbsoluteTimeGetCurrent() - RRLastPickTime;
-        if (!newRing && RRLastToneIdentifier != nil && elapsed >= 0 && elapsed <= RRSameRingWindow &&
-            [pool containsObject:RRLastToneIdentifier]) {
-            return RRLastToneIdentifier;
-        }
         NSString *identifier = RRPickNewTone(pool.array);
         NSLog(@"RadromRing: %@ picked %@ (slot %ld, per-SIM %d, %lu candidates, call %@)",
               [NSProcessInfo processInfo].processName, identifier, (long)slot, perSIM,
@@ -283,68 +277,97 @@ static NSString *RRRandomRingtoneIdentifier(BOOL newRing) {
     }
 }
 
-static NSString *RRGuardedRandomRingtone(BOOL newRing) {
+static NSString *RRGuardedRandomRingtone(void) {
     if (RRResolvingTone) return nil;
     RRResolvingTone = YES;
     NSString *identifier = nil;
     @autoreleasepool {
-        identifier = RRRandomRingtoneIdentifier(newRing);
+        identifier = RRRandomRingtoneIdentifier();
     }
     RRResolvingTone = NO;
     return identifier;
 }
 
-#pragma mark - Hooks
-
-static id RRReplacementForDefaultTone(long long alertType, id original) {
-    if (alertType != RRAlertTypeIncomingCall) return original;
-    if (RRAlertTone != NULL) return (__bridge NSString *)RRAlertTone;
-    return RRGuardedRandomRingtone(NO) ?: original;
-}
-
-static id RRHookCurrentToneForTypeTopic(id self, SEL selector, long long alertType, id topic) {
-    id original = RROriginalCurrentToneForTypeTopic(self, selector, alertType, topic);
-    return RRReplacementForDefaultTone(alertType, original);
-}
-
-static id RRHookCurrentToneForType(id self, SEL selector, long long alertType) {
-    id original = RROriginalCurrentToneForType(self, selector, alertType);
-    return RRReplacementForDefaultTone(alertType, original);
-}
-
-static id RRHookAlertWithConfiguration(id self, SEL selector, id configuration) {
+/* YES when this alert rings for an incoming call and would fall back to the user's default. */
+static BOOL RRAlertUsesDefaultRingtone(id configuration) {
     BOOL hasType = NO;
     long long alertType = RRIntegerGetter(configuration, @"type", &hasType);
-    if (!hasType || alertType != RRAlertTypeIncomingCall || RRAlertTone != NULL) {
+    if (!hasType || alertType != RRAlertTypeIncomingCall) return NO;
+    if (RRStringValue(RRCallObjectGetter(configuration, @"toneIdentifier")) != nil) return NO;
+    return RRCallObjectGetter(configuration, @"externalToneFileURL") == nil;
+}
+
+#pragma mark - Hooks
+
+/*
+ * Designated initializer every TLAlert goes through, after ToneLibrary has resolved
+ * the tone. Only the per-alert argument changes; the configuration and the stored
+ * default are left untouched.
+ */
+static id RRHookAlertInit(id self, SEL selector, id configuration, id toneIdentifier, id vibrationIdentifier) {
+    if (!RRAlertUsesDefaultRingtone(configuration)) {
+        return RROriginalAlertInit(self, selector, configuration, toneIdentifier, vibrationIdentifier);
+    }
+
+    NSString *tone = RRAlertTone != NULL ? (__bridge NSString *)RRAlertTone : RRGuardedRandomRingtone();
+    NSLog(@"RadromRing: incoming-call alert in %@ uses %@", [NSProcessInfo processInfo].processName,
+          tone != nil ? @"a random tone" : @"the system tone");
+    return RROriginalAlertInit(self, selector, configuration, tone ?: toneIdentifier, vibrationIdentifier);
+}
+
+/* Fallback for builds without the designated initializer: supply the tone on a private copy. */
+static id RRHookAlertWithConfiguration(id self, SEL selector, id configuration) {
+    if (RROriginalAlertInit != NULL || RRAlertTone != NULL || !RRAlertUsesDefaultRingtone(configuration)) {
         return RROriginalAlertWithConfiguration(self, selector, configuration);
     }
 
-    BOOL explicitTone = RRStringValue(RRCallObjectGetter(configuration, @"toneIdentifier")) != nil;
-    BOOL externalTone = RRCallObjectGetter(configuration, @"externalToneFileURL") != nil;
-    NSString *tone = explicitTone || externalTone ? nil : RRGuardedRandomRingtone(YES);
-    NSLog(@"RadromRing: incoming-call alert in %@ (explicit tone: %d, external: %d, replaced: %d)",
-          [NSProcessInfo processInfo].processName, explicitTone, externalTone, tone != nil);
-    if (tone == nil) return RROriginalAlertWithConfiguration(self, selector, configuration);
-
-    /* Copy so a configuration reused by the caller still counts as "no explicit tone" next ring. */
-    id effective = configuration;
-    if ([configuration conformsToProtocol:@protocol(NSCopying)]) {
-        @try {
-            effective = [configuration copy];
-        } @catch (NSException *exception) {
-            effective = configuration;
-        }
-    }
+    NSString *tone = RRGuardedRandomRingtone();
     SEL setter = NSSelectorFromString(@"setToneIdentifier:");
-    if ([effective respondsToSelector:setter]) {
-        void (*sendMessage)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
-        sendMessage(effective, setter, tone);
+    if (tone == nil || ![configuration conformsToProtocol:@protocol(NSCopying)]) {
+        return RROriginalAlertWithConfiguration(self, selector, configuration);
     }
+
+    id copy = nil;
+    @try {
+        copy = [configuration copy];
+    } @catch (NSException *exception) {
+        copy = nil;
+    }
+    if (![copy respondsToSelector:setter]) return RROriginalAlertWithConfiguration(self, selector, configuration);
+
+    void (*sendMessage)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
+    sendMessage(copy, setter, tone);
+    NSLog(@"RadromRing: incoming-call alert in %@ uses a random tone (configuration copy)",
+          [NSProcessInfo processInfo].processName);
 
     RRAlertTone = (__bridge void *)tone;
-    id alert = RROriginalAlertWithConfiguration(self, selector, effective);
+    id alert = RROriginalAlertWithConfiguration(self, selector, copy);
     RRAlertTone = NULL;
     return alert;
+}
+
+/* Guard: a tone RadromRing picked for a single ring must never become the saved default. */
+static BOOL RRShouldBlockDefaultWrite(id identifier, long long alertType) {
+    if (alertType != RRAlertTypeIncomingCall || RRStringValue(identifier) == nil) return NO;
+    BOOL picked = NO;
+    @synchronized (RRStateLock) {
+        picked = [RRPickedTones containsObject:identifier];
+    }
+    if (picked) {
+        NSLog(@"RadromRing: blocked %@ from saving ringtone %@ as the default",
+              [NSProcessInfo processInfo].processName, identifier);
+    }
+    return picked;
+}
+
+static void RRHookSetToneForType(id self, SEL selector, id identifier, long long alertType) {
+    if (RRShouldBlockDefaultWrite(identifier, alertType)) return;
+    RROriginalSetToneForType(self, selector, identifier, alertType);
+}
+
+static void RRHookSetToneForTypeTopic(id self, SEL selector, id identifier, long long alertType, id topic) {
+    if (RRShouldBlockDefaultWrite(identifier, alertType)) return;
+    RROriginalSetToneForTypeTopic(self, selector, identifier, alertType, topic);
 }
 
 static void RRHookMethod(Class targetClass, SEL selector, IMP replacement, IMP *original) {
@@ -358,28 +381,32 @@ static void RRHookMethod(Class targetClass, SEL selector, IMP replacement, IMP *
 static BOOL RRInstallHooks(void) {
     dlopen("/System/Library/PrivateFrameworks/ToneLibrary.framework/ToneLibrary", RTLD_LAZY);
 
-    Class managerClass = objc_getClass("TLToneManager");
-    RRHookMethod(managerClass,
-                 NSSelectorFromString(@"currentToneIdentifierForAlertType:topic:"),
-                 (IMP)RRHookCurrentToneForTypeTopic,
-                 (IMP *)&RROriginalCurrentToneForTypeTopic);
-    RRHookMethod(managerClass,
-                 NSSelectorFromString(@"currentToneIdentifierForAlertType:"),
-                 (IMP)RRHookCurrentToneForType,
-                 (IMP *)&RROriginalCurrentToneForType);
-
     Class alertClass = objc_getClass("TLAlert");
+    RRHookMethod(alertClass,
+                 NSSelectorFromString(@"_initWithConfiguration:toneIdentifier:vibrationIdentifier:"),
+                 (IMP)RRHookAlertInit,
+                 (IMP *)&RROriginalAlertInit);
     RRHookMethod(alertClass != Nil ? object_getClass(alertClass) : Nil,
                  NSSelectorFromString(@"alertWithConfiguration:"),
                  (IMP)RRHookAlertWithConfiguration,
                  (IMP *)&RROriginalAlertWithConfiguration);
 
+    Class managerClass = objc_getClass("TLToneManager");
+    RRHookMethod(managerClass,
+                 NSSelectorFromString(@"setCurrentToneIdentifier:forAlertType:"),
+                 (IMP)RRHookSetToneForType,
+                 (IMP *)&RROriginalSetToneForType);
+    RRHookMethod(managerClass,
+                 NSSelectorFromString(@"setCurrentToneIdentifier:forAlertType:topic:"),
+                 (IMP)RRHookSetToneForTypeTopic,
+                 (IMP *)&RROriginalSetToneForTypeTopic);
+
     /* Only used to find the ringing call's SIM; optional. */
     RRHookMethod(objc_getClass("TUCall"), @selector(init), (IMP)RRHookCallInit,
                  (IMP *)&RROriginalCallInit);
 
-    return (RROriginalCurrentToneForTypeTopic != NULL || RROriginalCurrentToneForType != NULL) &&
-           RROriginalAlertWithConfiguration != NULL && RROriginalCallInit != NULL;
+    return (RROriginalAlertInit != NULL || RROriginalAlertWithConfiguration != NULL) &&
+           RROriginalCallInit != NULL;
 }
 
 static void RRScheduleInstallPoll(void) {
@@ -402,6 +429,7 @@ static void RRInitialize(void) {
         if (![processName isEqualToString:@"callservicesd"] && !RRIsInCallService) return;
 
         RRStateLock = [[NSObject alloc] init];
+        RRPickedTones = [NSMutableSet set];
         RRTrackedCalls = [NSHashTable weakObjectsHashTable];
         if (!RRInstallHooks()) RRScheduleInstallPoll();
     }

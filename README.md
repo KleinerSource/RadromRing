@@ -10,7 +10,7 @@
 - 只处理蜂窝来电铃声；能识别到来电对象时，FaceTime 与第三方 VoIP 来电不处理。
 - 联系人号码配置了专属铃声时保留系统结果，即使专属铃声与默认铃声相同。
 - 停用、选择为空或铃声无效时沿用系统结果。
-- 不修改联系人数据或系统默认铃声。
+- 不读改、不写入系统默认铃声，也不修改联系人数据：卸载插件或离开越狱环境后，系统“声音与触感”中的铃声保持用户原先的设置。
 
 偏好设置保存在 `com.kleinersource.radromring` 域中：`enabled`、`selectedToneIDs`（全局列表）、`perSIMEnabled`、`selectedToneIDsSIM1`/`selectedToneIDsSIM2`，以及设置页写入的 `simAccounts`（SIM 订阅 UUID → 卡槽）。
 
@@ -26,7 +26,15 @@ Theos/RootHide 编译只在 GitHub Actions 执行。运行 `.github/workflows/bu
 
 ## 实现
 
-来电铃声由 ToneLibrary 解析：每次响铃都会创建一个 `TLAlertTypeIncomingCall`（类型 1）的 `TLAlert`，其配置若没有显式 `toneIdentifier`，会向 `TLToneManager` 查询当前默认铃声。自 0.5.0 起，`+[TLAlert alertWithConfiguration:]` 被 hook：类型 1 且无显式铃声/外部铃声文件时，复制一份配置并填入新抽选的铃声，因此每次响铃都不同。联系人专属铃声以显式 ID 传入，保持不变。默认查询（`currentToneIdentifierForAlertType:[topic:]`）同样被替换，作为未经过 `alertWithConfiguration:` 的后备路径；其结果在抽选后 2 秒内（不滑动延长）复用。
+每次来电响铃都会创建一个 `TLAlertTypeIncomingCall`（类型 1）的 `TLAlert`。配置里没有显式 `toneIdentifier` 时，ToneLibrary 播放用户的默认铃声；联系人专属铃声则以显式 ID 传入。
+
+自 0.6.0 起，RadromRing 只为单个响铃提醒提供铃声，与系统传入联系人专属铃声的方式相同：
+
+- hook `-[TLAlert _initWithConfiguration:toneIdentifier:vibrationIdentifier:]`（所有 TLAlert 的指定初始化方法）。类型 1、配置中没有显式铃声也没有外部铃声文件时，把这一次提醒的铃声参数换成新抽选的铃声；配置对象本身不改。系统缺少该方法时，改为 hook `+[TLAlert alertWithConfiguration:]`，在配置的私有副本上填入铃声。
+- 不再 hook `TLToneManager` 的默认铃声查询，任何进程读取到的默认铃声都是用户的真实设置；插件也从不调用任何写入默认铃声的接口。
+- 防护：在注入进程中 hook `setCurrentToneIdentifier:forAlertType:[topic:]`，如果有代码试图把插件为某次响铃抽中的铃声保存为来电默认铃声，直接拦截并记录日志。
+
+0.4.x–0.5.0 使用的是替换默认铃声查询返回值的方式（只在内存中，不写入设置），已在 0.6.0 移除。
 
 来电卡槽识别：设置页用 CoreTelephony 的订阅信息检测 SIM 卡并写入 `simAccounts`；tweak 在响铃时找到振铃中的来电（InCallService 用 `TUCallCenter`，callservicesd 用对 `-[TUCall init]` 的弱引用跟踪），用其 `localSenderIdentity` 的 UUID 匹配卡槽。
 
@@ -34,4 +42,4 @@ Theos/RootHide 编译只在 GitHub Actions 执行。运行 `.github/workflows/bu
 
 ## 设备验证
 
-目标设备为 iPhone 14 Pro（`iPhone15,2`）、iOS 17.0（`21A329`）、Relaxin 0.5.3 / ElleKit 1.2-1。0.3.x 的 hook 位于 `TUCallSoundPlayerDescriptor` 层且只注入 `SpringBoard`/`MobilePhone`，设备实测该层与这些进程均不解析来电铃声（SpringBoard 来电时没有类型 1 的查询），因此铃声始终为默认值。0.4.x 改为替换默认查询后随机生效，但短时间内连续来电会复用同一首；0.5.0 改为每次响铃重新抽选，并加入双卡独立列表。双卡卡槽识别依赖 CoreTelephony 订阅 UUID 与来电 sender identity UUID 一致，需在设备上确认。
+目标设备为 iPhone 14 Pro（`iPhone15,2`）、iOS 17.0（`21A329`）、Relaxin 0.5.3 / ElleKit 1.2-1。0.3.x 的 hook 位于 `TUCallSoundPlayerDescriptor` 层且只注入 `SpringBoard`/`MobilePhone`，设备实测该层与这些进程均不解析来电铃声（SpringBoard 来电时没有类型 1 的查询），因此铃声始终为默认值。0.4.x 改为替换默认查询后随机生效，但短时间内连续来电会复用同一首；0.5.0 改为每次响铃重新抽选，并加入双卡独立列表。0.6.0 不再以任何形式替换默认铃声，只为单次响铃提供铃声；需在设备上确认 iOS 17.0 的来电铃声确实经由 `TLAlert` 创建（日志 `RadromRing: incoming-call alert`），并确认“设置 › 声音与触感 › 电话铃声”在多次来电后保持不变。双卡卡槽识别依赖 CoreTelephony 订阅 UUID 与来电 sender identity UUID 一致，需在设备上确认。
