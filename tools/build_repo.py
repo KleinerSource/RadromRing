@@ -10,6 +10,7 @@ import bz2
 import gzip
 import hashlib
 import io
+import json
 import lzma
 import pathlib
 import shutil
@@ -28,7 +29,7 @@ REPO_FIELDS = {
 }
 
 CONTROL_FIELD_ORDER = (
-    "Package", "Name", "Version", "Architecture", "Description", "Maintainer",
+    "Package", "Name", "Version", "Architecture", "Description", "Depiction", "Maintainer",
     "Author", "Section", "Depends", "Conflicts", "Replaces", "Installed-Size",
 )
 
@@ -99,11 +100,46 @@ def digest_fields(data):
     }
 
 
+def read_changelog():
+    path = pathlib.Path(__file__).resolve().parents[1] / "CHANGELOG.md"
+    return path.read_text(encoding="utf-8").strip()
+
+
+def write_depiction(output, changelog):
+    depiction = {
+        "class": "DepictionTabView",
+        "tabs": [
+            {
+                "tabname": "详情",
+                "class": "DepictionStackView",
+                "views": [{
+                    "class": "DepictionMarkdownView",
+                    "markdown": "RandomRing 为 iOS 17.0 RootHide 设备提供蜂窝来电随机铃声。",
+                    "useSpacing": True,
+                }],
+            },
+            {
+                "tabname": "更新日志",
+                "class": "DepictionStackView",
+                "views": [{
+                    "class": "DepictionMarkdownView",
+                    "markdown": changelog,
+                    "useSpacing": True,
+                }],
+            },
+        ],
+    }
+    (output / "depiction.json").write_text(
+        json.dumps(depiction, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
     source = pathlib.Path(sys.argv[1])
     output = pathlib.Path(sys.argv[2])
+    changelog = read_changelog()
     debs = sorted(source.glob("*.deb"))
     if not debs:
         raise SystemExit(f"No .deb files in {source}")
@@ -127,6 +163,8 @@ def main():
     }
     for name, content in indexes.items():
         (output / name).write_bytes(content)
+
+    write_depiction(output, changelog)
 
     release = "".join(f"{key}: {value}\n" for key, value in REPO_FIELDS.items())
     for algorithm, label in (("md5", "MD5Sum"), ("sha1", "SHA1"), ("sha256", "SHA256")):

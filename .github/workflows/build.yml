@@ -5,8 +5,11 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
     paths:
       - .github/workflows/build.yml
+      - CHANGELOG.md
       - Makefile
       - control
       - core/**
@@ -106,13 +109,13 @@ jobs:
           cat "$RUNNER_TEMP/repo/Packages"
 
       - name: Upload repository for Pages
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ runner.temp }}/repo
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -125,3 +128,30 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+
+      - name: Download deb
+        uses: actions/download-artifact@v4
+        with:
+          name: RandomRing-roothide
+          path: release-assets
+
+      - name: Prepare release notes
+        run: python3 tools/release_notes.py "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RandomRing ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          files: release-assets/*.deb
+          fail_on_unmatched_files: true

@@ -20,6 +20,8 @@ Sileo / Zebra 添加源：`https://kleinersource.github.io/RandomRing/`
 
 `main` 每次构建成功后，Actions 用 `tools/build_repo.py` 生成 `Packages`/`Release` 索引并部署到 GitHub Pages（源中只保留最近一次构建的包）；已添加源的设备刷新后即可更新。仓库需在 Settings › Pages 中把 Source 设为 “GitHub Actions”。
 
+更新日志维护在 `CHANGELOG.md`。打 `v*` 标签会构建并发布带对应版本说明的 GitHub Release，同时更新 Sileo 源；源构建会生成 `depiction.json`，在 Sileo 包详情页提供“更新日志”标签。
+
 ## 构建
 
 Theos/RootHide 编译只在 GitHub Actions 执行。运行 `.github/workflows/build.yml` 的 `workflow_dispatch`，下载 `RandomRing-roothide` artifact 中的 `.deb`。
