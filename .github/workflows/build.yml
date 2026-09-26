@@ -7,19 +7,6 @@ on:
       - main
     tags:
       - "v*"
-    paths:
-      - .github/workflows/build.yml
-      - CHANGELOG.md
-      - Makefile
-      - control
-      - core/**
-      - Prefs/**
-      - layout/**
-      - RandomRingProbe.plist
-      - Probe.m
-      - tests/**
-      - tools/**
-      - repo/**
 
 permissions:
   contents: read
@@ -33,6 +20,8 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 20
+    permissions:
+      contents: write
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       THEOS: /tmp/theos
@@ -40,6 +29,19 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Calculate and persist version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          commit_message="$(git log -1 --format=%B "${GITHUB_SHA}")"
+          version="$(python3 tools/bump_version.py "${commit_message}")"
+          echo "Package version: ${version}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add control Prefs/Resources/Info.plist
+          git commit -m "chore: bump version to ${version} [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Set up RootHide Theos
         run: |
@@ -138,6 +140,8 @@ jobs:
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Download deb
         uses: actions/download-artifact@v4
